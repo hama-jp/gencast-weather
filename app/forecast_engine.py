@@ -63,12 +63,27 @@ def load_model():
     print("Model ready.", flush=True)
 
 
+def _pick_era5_path() -> str:
+    """Return era5_latest.nc if it exists and is fresh (<25h old), else sample."""
+    import time as _time
+    latest = f'{DATA_DIR}/dataset/era5_latest.nc'
+    sample = f'{DATA_DIR}/dataset/era5_1p0deg_1step.nc'
+    import os
+    if os.path.exists(latest):
+        age_h = (_time.time() - os.path.getmtime(latest)) / 3600
+        if age_h < 25:
+            print(f"Using era5_latest.nc (age {age_h:.1f}h)", flush=True)
+            return latest
+    print("Using static ERA5 sample (2019-03-29)", flush=True)
+    return sample
+
+
 def run_forecast(num_members: int = 5, progress_cb=None) -> dict:
     """Run GenCast and return JSON-serializable forecast dict."""
     load_model()
 
-    example_batch = xarray.open_dataset(
-        f'{DATA_DIR}/dataset/era5_1p0deg_1step.nc', engine='netcdf4').load()
+    era5_path = _pick_era5_path()
+    example_batch = xarray.open_dataset(era5_path, engine='netcdf4').load()
 
     eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
         example_batch, target_lead_times=slice("12h", "12h"),
@@ -112,10 +127,17 @@ def run_forecast(num_members: int = 5, progress_cb=None) -> dict:
     lats_ds = lats[::2]
     lons_ds = lons[::2]
 
+    # Source label from datetime coord if available
+    try:
+        dt_val = str(example_batch.coords['datetime'].values[0, -1])[:10]
+        source_label = f'ERA5 {dt_val}'
+    except Exception:
+        source_label = 'ERA5 sample'
+
     return {
         'meta': {
             'model': 'GenCast 1p0deg Mini',
-            'source': 'ERA5 2019-03-29',
+            'source': source_label,
             'lead_time': '+12h',
             'num_members': num_members,
             'elapsed_sec': round(time.time() - t0, 1),

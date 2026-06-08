@@ -72,6 +72,7 @@ button:disabled { opacity:.4; cursor:default; }
     <option value="8">8</option>
   </select>
 
+  <button id="era5-btn" onclick="fetchEra5()" title="CDS APIで最新ERA5を取得">🌐 ERA5取得</button>
   <button class="primary" id="run-btn" onclick="runForecast()">▶ 推論実行</button>
 
   <div id="progress-bar-wrap">
@@ -273,6 +274,39 @@ function setStatus(msg, done, total) {
   document.getElementById('status-text').textContent = msg;
   const pct = total ? (done / total) * 100 : 0;
   document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+// ── ERA5 fetch ───────────────────────────────────────────────────
+let era5PollTimer = null;
+
+async function fetchEra5() {
+  const btn = document.getElementById('era5-btn');
+  btn.disabled = true;
+  setStatus('ERA5取得中... (最大20分)', 0, 1);
+
+  const res = await fetch('/api/fetch-era5', { method: 'POST' });
+  if (!res.ok) {
+    const e = await res.json();
+    setStatus('ERA5取得エラー: ' + (e.error || res.status), 0, 1);
+    btn.disabled = false;
+    return;
+  }
+
+  era5PollTimer = setInterval(async () => {
+    const r = await fetch('/api/fetch-era5/status');
+    const s = await r.json();
+    setStatus(`ERA5取得中... (${s.elapsed}s)`, 0, 1);
+    if (s.status === 'done') {
+      clearInterval(era5PollTimer);
+      setStatus('ERA5取得完了！ 推論実行できます。', 1, 1);
+      btn.disabled = false;
+    } else if (s.status === 'error') {
+      clearInterval(era5PollTimer);
+      const lastLine = s.log.trim().split('\n').pop();
+      setStatus('ERA5取得失敗: ' + lastLine, 0, 1);
+      btn.disabled = false;
+    }
+  }, 5000);
 }
 
 // Layer switch

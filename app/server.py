@@ -1,5 +1,5 @@
 """FastAPI server for GenCast local weather app."""
-import os, json, asyncio, time
+import os, json, asyncio, time, subprocess, sys
 from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, BackgroundTasks
@@ -65,6 +65,46 @@ async def status(job_id: str):
         'total':    job['total'],
         'elapsed':  round(time.time() - job['started'], 1),
         'error':    job.get('error'),
+    }
+
+
+_fetch_status = {'status': 'idle', 'log': '', 'started': 0.0}
+
+@app.post('/api/fetch-era5')
+async def fetch_era5(background_tasks: BackgroundTasks, date: str = ''):
+    """Download latest ERA5 data via CDS API (runs in background)."""
+    if _fetch_status['status'] == 'running':
+        return JSONResponse({'error': 'already running'}, status_code=409)
+    _fetch_status.update({'status': 'running', 'log': '', 'started': time.time()})
+
+    def do_fetch():
+        script = str(Path(__file__).parent.parent / 'scripts' / 'fetch_era5.py')
+        args = [sys.executable, script]
+        if date:
+            args.append(date)
+        try:
+            result = subprocess.run(args, capture_output=True, text=True, timeout=1200)
+            out = result.stdout + result.stderr
+            status = 'done' if result.returncode == 0 else 'error'
+        except subprocess.TimeoutExpired:
+            out = 'Timed out after 20 min'
+            status = 'error'
+        except Exception as e:
+            out = str(e)
+            status = 'error'
+        _fetch_status.update({'status': status, 'log': out[-4000:]})
+
+    background_tasks.add_task(do_fetch)
+    return {'status': 'started'}
+
+
+@app.get('/api/fetch-era5/status')
+async def fetch_era5_status():
+    s = _fetch_status
+    return {
+        'status':  s['status'],
+        'elapsed': round(time.time() - s['started'], 0) if s['started'] else 0,
+        'log':     s['log'],
     }
 
 
