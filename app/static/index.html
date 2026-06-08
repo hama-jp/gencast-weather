@@ -179,26 +179,35 @@ function renderLayer(layerKey) {
       Math.sqrt(u[ri][ci]**2 + v[ri][ci]**2)));
   }
 
-  // Build canvas overlay
+  // Roll longitude: data is 0-360, roll by half so canvas starts at -180
+  // This lets us tile the image 3× for seamless horizontal wrapping
+  const halfCols = Math.floor(cols / 2);
+
   const canvas = document.createElement('canvas');
   canvas.width = cols; canvas.height = rows;
   const ctx = canvas.getContext('2d');
+  ctx.globalAlpha = 0.72;
 
   for (let ri=0; ri<rows; ri++) {
     for (let ci=0; ci<cols; ci++) {
-      const val = data[ri][ci];
+      const oc = (ci + halfCols) % cols;   // source col in original 0-360 data
+      const val = data[ri][oc];
       ctx.fillStyle = interpColor(val, scale.stops, scale.colors);
-      ctx.globalAlpha = 0.72;
       ctx.fillRect(ci, ri, 1, 1);
     }
   }
 
-  // Convert to image overlay
-  const bounds = [
-    [lats[rows-1] - cellH/2, lons[0] - cellW/2],
-    [lats[0]      + cellH/2, lons[cols-1] + cellW/2],
-  ];
-  overlayLayer = L.imageOverlay(canvas.toDataURL(), bounds, { opacity:0.8 }).addTo(map);
+  // Bounds: rolled canvas covers -180 to +180
+  const south = lats[rows-1] - cellH/2;
+  const north = lats[0]      + cellH/2;
+  const imgUrl = canvas.toDataURL();
+
+  // Place 3 copies (left / center / right) for seamless wrapping
+  const grp = L.layerGroup().addTo(map);
+  [-360, 0, 360].forEach(offset =>
+    L.imageOverlay(imgUrl, [[south, -180+offset], [north, 180+offset]], {opacity:0.8}).addTo(grp)
+  );
+  overlayLayer = grp;
 
   // Wind arrows (only for wind layer)
   if (layerKey === 'wind') {
@@ -206,12 +215,15 @@ function renderLayer(layerKey) {
     const step = 8;
     for (let ri=0; ri<rows; ri+=step) {
       for (let ci=0; ci<cols; ci+=step) {
-        const u = ensemble_mean.u10[ri][ci];
-        const v = ensemble_mean.v10[ri][ci];
+        const oc = (ci + halfCols) % cols;
+        const u = ensemble_mean.u10[ri][oc];
+        const v = ensemble_mean.v10[ri][oc];
         const speed = Math.sqrt(u*u + v*v);
         if (speed < 1) continue;
         const angle = Math.atan2(u, v) * 180 / Math.PI;
-        const lat = lats[ri], lng = lons[ci] > 180 ? lons[ci]-360 : lons[ci];
+        const lat = lats[ri];
+        const rawLon = lons[oc];
+        const lng = rawLon > 180 ? rawLon - 360 : rawLon;
         const icon = L.divIcon({
           html: `<div style="transform:rotate(${angle}deg);color:rgba(255,255,255,.8);font-size:14px;">↑</div>`,
           className:'', iconSize:[14,14], iconAnchor:[7,7]
