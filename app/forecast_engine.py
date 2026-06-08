@@ -25,7 +25,7 @@ def load_model():
         return
 
     print("Loading GenCast model...", flush=True)
-    with open(f'{DATA_DIR}/params/GenCast_1p0deg_Mini.npz', 'rb') as f:
+    with open(f'{DATA_DIR}/params/GenCast_1p0deg.npz', 'rb') as f:
         ckpt = checkpoint.load(f, gencast.CheckPoint)
 
     _params = ckpt.params
@@ -146,7 +146,7 @@ def run_forecast(num_members: int = 5, progress_cb=None) -> dict:
 
     return {
         'meta': {
-            'model': 'GenCast 1p0deg Mini',
+            'model': 'GenCast 1p0deg',
             'source': source_label,
             'init_time': init_dt,
             'valid_time': valid_dt,
