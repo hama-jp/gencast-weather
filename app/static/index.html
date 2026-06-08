@@ -1,0 +1,285 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>GenCast Weather</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css"/>
+<style>
+* { margin:0; padding:0; box-sizing:border-box; }
+body { background:#0d1b2a; color:#e0e6f0; font-family:'Segoe UI',sans-serif; height:100vh; display:flex; flex-direction:column; }
+
+#header {
+  background:#0a1628;
+  border-bottom:1px solid #1e3a5f;
+  padding:10px 18px;
+  display:flex; align-items:center; gap:16px;
+}
+#header h1 { font-size:15px; font-weight:700; color:#56cfb2; }
+#header .sub { font-size:11px; color:#6a8aaa; }
+
+#controls {
+  background:#0a1628;
+  border-bottom:1px solid #1e3a5f;
+  padding:8px 18px;
+  display:flex; align-items:center; gap:12px; flex-wrap:wrap;
+}
+.ctrl-label { font-size:11px; color:#7a9ac0; text-transform:uppercase; letter-spacing:.5px; }
+select, button { background:#132440; border:1px solid #1e3a5f; color:#c8daf0;
+  padding:5px 10px; border-radius:5px; font-size:12px; cursor:pointer; }
+button:hover { background:#1e3a5f; }
+button.primary { background:#0d5986; border-color:#1b9aaa; color:#fff; font-weight:600; }
+button.primary:hover { background:#1b9aaa; }
+button:disabled { opacity:.4; cursor:default; }
+#progress-bar-wrap { flex:1; min-width:150px; }
+#progress-bar-bg { background:#132440; border-radius:4px; height:6px; overflow:hidden; }
+#progress-bar { background:#56cfb2; height:100%; width:0%; transition:width .3s; border-radius:4px; }
+#status-text { font-size:11px; color:#56cfb2; min-width:120px; }
+
+#map { flex:1; }
+
+#legend {
+  position:absolute; bottom:30px; right:10px; z-index:1000;
+  background:rgba(10,22,40,.88); border:1px solid #1e3a5f;
+  border-radius:8px; padding:10px 14px; font-size:11px; min-width:160px;
+}
+#legend h4 { color:#56cfb2; margin-bottom:6px; font-size:12px; }
+.legend-row { display:flex; align-items:center; gap:6px; margin:3px 0; }
+.legend-swatch { width:14px; height:14px; border-radius:2px; flex-shrink:0; }
+.legend-label { color:#9ab; }
+</style>
+</head>
+<body>
+
+<div id="header">
+  <h1>🌀 GenCast Weather</h1>
+  <div class="sub">Google DeepMind GenCast 1° | ローカル推論</div>
+</div>
+
+<div id="controls">
+  <span class="ctrl-label">レイヤー</span>
+  <select id="layer-sel">
+    <option value="t2m">🌡 2m気温</option>
+    <option value="mslp">🔵 海面気圧</option>
+    <option value="wind">💨 風速</option>
+    <option value="spread">📊 アンサンブルスプレッド</option>
+  </select>
+
+  <span class="ctrl-label">メンバー数</span>
+  <select id="members-sel">
+    <option value="3">3</option>
+    <option value="5" selected>5</option>
+    <option value="8">8</option>
+  </select>
+
+  <button class="primary" id="run-btn" onclick="runForecast()">▶ 推論実行</button>
+
+  <div id="progress-bar-wrap">
+    <div id="progress-bar-bg"><div id="progress-bar"></div></div>
+  </div>
+  <span id="status-text">待機中</span>
+</div>
+
+<div id="map"></div>
+
+<div id="legend">
+  <h4 id="legend-title">凡例</h4>
+  <div id="legend-body"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+<script>
+// ── Map init ────────────────────────────────────────────────────
+const map = L.map('map', { center:[30, 140], zoom:4,
+  zoomControl:true, preferCanvas:true });
+
+L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  attribution:'© OpenStreetMap © CARTO', maxZoom:18
+}).addTo(map);
+
+// ── Color scales ────────────────────────────────────────────────
+const SCALES = {
+  t2m: {
+    stops: [-40,-20,0,10,20,30,45],
+    colors:['#0a3070','#1b9aaa','#56cfb2','#f7f7f7','#f4a261','#e76f51','#641220'],
+    label:'2m気温 (°C)',
+  },
+  mslp: {
+    stops:[960,980,1000,1010,1020,1040],
+    colors:['#641220','#e76f51','#f7f7f7','#56cfb2','#1b9aaa','#0a3070'],
+    label:'海面気圧 (hPa)',
+  },
+  wind: {
+    stops:[0,5,10,15,20,25],
+    colors:['#0a1628','#1b9aaa','#56cfb2','#f4a261','#e76f51','#641220'],
+    label:'風速 (m/s)',
+  },
+  spread: {
+    stops:[0,0.5,1,2,3,4],
+    colors:['#0a1628','#1a3a5c','#0d5986','#f4a261','#e76f51','#641220'],
+    label:'T2mスプレッド (K)',
+  },
+};
+
+function interpColor(val, stops, colors) {
+  if (val <= stops[0]) return colors[0];
+  if (val >= stops[stops.length-1]) return colors[colors.length-1];
+  for (let i=1; i<stops.length; i++) {
+    if (val <= stops[i]) {
+      const t = (val - stops[i-1]) / (stops[i] - stops[i-1]);
+      return lerpHex(colors[i-1], colors[i], t);
+    }
+  }
+  return colors[colors.length-1];
+}
+
+function lerpHex(c1, c2, t) {
+  const p = (h) => parseInt(h.slice(1), 16);
+  const r1=p(c1)>>16, g1=(p(c1)>>8)&255, b1=p(c1)&255;
+  const r2=p(c2)>>16, g2=(p(c2)>>8)&255, b2=p(c2)&255;
+  const r=Math.round(r1+t*(r2-r1));
+  const g=Math.round(g1+t*(g2-g1));
+  const b=Math.round(b1+t*(b2-b1));
+  return `rgb(${r},${g},${b})`;
+}
+
+// ── Render forecast ─────────────────────────────────────────────
+let overlayLayer = null;
+let windLayer    = null;
+let forecastData = null;
+
+function renderLayer(layerKey) {
+  if (!forecastData) return;
+  const { grid, ensemble_mean, ensemble_spread } = forecastData;
+  const { lats, lons } = grid;
+  const scale = SCALES[layerKey];
+
+  if (overlayLayer) { map.removeLayer(overlayLayer); overlayLayer = null; }
+  if (windLayer)    { map.removeLayer(windLayer);    windLayer    = null; }
+
+  const rows = lats.length, cols = lons.length;
+  const cellH = Math.abs(lats[1] - lats[0]);
+  const cellW = Math.abs(lons[1] - lons[0]);
+
+  // Pick data source
+  let data;
+  if (layerKey === 't2m')    data = ensemble_mean.t2m;
+  if (layerKey === 'mslp')   data = ensemble_mean.mslp;
+  if (layerKey === 'spread') data = ensemble_spread.t2m;
+  if (layerKey === 'wind') {
+    const u = ensemble_mean.u10, v = ensemble_mean.v10;
+    data = u.map((row, ri) => row.map((_, ci) =>
+      Math.sqrt(u[ri][ci]**2 + v[ri][ci]**2)));
+  }
+
+  // Build canvas overlay
+  const canvas = document.createElement('canvas');
+  canvas.width = cols; canvas.height = rows;
+  const ctx = canvas.getContext('2d');
+
+  for (let ri=0; ri<rows; ri++) {
+    for (let ci=0; ci<cols; ci++) {
+      const val = data[ri][ci];
+      ctx.fillStyle = interpColor(val, scale.stops, scale.colors);
+      ctx.globalAlpha = 0.72;
+      ctx.fillRect(ci, ri, 1, 1);
+    }
+  }
+
+  // Convert to image overlay
+  const bounds = [
+    [lats[rows-1] - cellH/2, lons[0] - cellW/2],
+    [lats[0]      + cellH/2, lons[cols-1] + cellW/2],
+  ];
+  overlayLayer = L.imageOverlay(canvas.toDataURL(), bounds, { opacity:0.8 }).addTo(map);
+
+  // Wind arrows (only for wind layer)
+  if (layerKey === 'wind') {
+    const arrowGroup = L.layerGroup().addTo(map);
+    const step = 8;
+    for (let ri=0; ri<rows; ri+=step) {
+      for (let ci=0; ci<cols; ci+=step) {
+        const u = ensemble_mean.u10[ri][ci];
+        const v = ensemble_mean.v10[ri][ci];
+        const speed = Math.sqrt(u*u + v*v);
+        if (speed < 1) continue;
+        const angle = Math.atan2(u, v) * 180 / Math.PI;
+        const lat = lats[ri], lng = lons[ci] > 180 ? lons[ci]-360 : lons[ci];
+        const icon = L.divIcon({
+          html: `<div style="transform:rotate(${angle}deg);color:rgba(255,255,255,.8);font-size:14px;">↑</div>`,
+          className:'', iconSize:[14,14], iconAnchor:[7,7]
+        });
+        L.marker([lat, lng], { icon, interactive:false }).addTo(arrowGroup);
+      }
+    }
+    windLayer = arrowGroup;
+  }
+
+  // Update legend
+  updateLegend(scale);
+}
+
+function updateLegend(scale) {
+  document.getElementById('legend-title').textContent = scale.label;
+  const body = document.getElementById('legend-body');
+  body.innerHTML = '';
+  scale.stops.forEach((val, i) => {
+    if (i >= scale.colors.length) return;
+    const row = document.createElement('div');
+    row.className = 'legend-row';
+    row.innerHTML = `<div class="legend-swatch" style="background:${scale.colors[i]}"></div>
+                     <span class="legend-label">${val}</span>`;
+    body.appendChild(row);
+  });
+}
+
+// ── Forecast API ─────────────────────────────────────────────────
+let pollTimer = null;
+
+async function runForecast() {
+  const btn = document.getElementById('run-btn');
+  const members = parseInt(document.getElementById('members-sel').value);
+  btn.disabled = true;
+  setStatus('推論開始中...', 0, members);
+
+  const res = await fetch(`/api/run?members=${members}`, { method:'POST' });
+  const { job_id } = await res.json();
+
+  pollTimer = setInterval(() => pollStatus(job_id, btn), 2000);
+}
+
+async function pollStatus(job_id, btn) {
+  const r = await fetch(`/api/status/${job_id}`);
+  const s = await r.json();
+  setStatus(`推論中 ${s.progress}/${s.total} (${s.elapsed}s)`, s.progress, s.total);
+
+  if (s.status === 'done') {
+    clearInterval(pollTimer);
+    setStatus('完了！ データ取得中...', s.total, s.total);
+    const fr = await fetch(`/api/forecast/${job_id}`);
+    forecastData = await fr.json();
+    renderLayer(document.getElementById('layer-sel').value);
+    setStatus(`完了 (${forecastData.meta.elapsed_sec}s / ${forecastData.meta.num_members}メンバー)`, s.total, s.total);
+    btn.disabled = false;
+  } else if (s.status === 'error') {
+    clearInterval(pollTimer);
+    setStatus('エラー: ' + s.error, 0, s.total);
+    btn.disabled = false;
+  }
+}
+
+function setStatus(msg, done, total) {
+  document.getElementById('status-text').textContent = msg;
+  const pct = total ? (done / total) * 100 : 0;
+  document.getElementById('progress-bar').style.width = pct + '%';
+}
+
+// Layer switch
+document.getElementById('layer-sel').addEventListener('change', e => {
+  renderLayer(e.target.value);
+});
+
+</script>
+</body>
+</html>
