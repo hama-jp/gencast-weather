@@ -85,6 +85,16 @@ def run_forecast(num_members: int = 5, progress_cb=None) -> dict:
     era5_path = _pick_era5_path()
     example_batch = xarray.open_dataset(era5_path, engine='netcdf4').load()
 
+    # Extract init time (last input step) and valid time (init + 12h)
+    try:
+        init_dt = str(example_batch.coords['datetime'].values[0, -1])[:16].replace('T', ' ') + ' UTC'
+        import numpy as np
+        valid_ns = example_batch.coords['datetime'].values[0, -1] + np.timedelta64(12, 'h')
+        valid_dt = str(valid_ns)[:16].replace('T', ' ') + ' UTC'
+    except Exception:
+        init_dt = 'unknown'
+        valid_dt = 'unknown'
+
     eval_inputs, eval_targets, eval_forcings = data_utils.extract_inputs_targets_forcings(
         example_batch, target_lead_times=slice("12h", "12h"),
         **dataclasses.asdict(_task_config))
@@ -138,6 +148,8 @@ def run_forecast(num_members: int = 5, progress_cb=None) -> dict:
         'meta': {
             'model': 'GenCast 1p0deg Mini',
             'source': source_label,
+            'init_time': init_dt,
+            'valid_time': valid_dt,
             'lead_time': '+12h',
             'num_members': num_members,
             'elapsed_sec': round(time.time() - t0, 1),

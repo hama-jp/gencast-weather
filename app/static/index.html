@@ -54,6 +54,11 @@ button:disabled { opacity:.4; cursor:default; }
 <div id="header">
   <h1>🌀 GenCast Weather</h1>
   <div class="sub">Google DeepMind GenCast 1° | ローカル推論</div>
+  <div id="time-info" style="margin-left:auto; font-size:11px; color:#56cfb2; display:none;">
+    <span id="init-label">初期値</span>: <strong id="init-time">—</strong>
+    &nbsp;→&nbsp;
+    <span id="valid-label">予報時刻</span>: <strong id="valid-time">—</strong>
+  </div>
 </div>
 
 <div id="controls">
@@ -262,6 +267,12 @@ async function pollStatus(job_id, btn) {
     forecastData = await fr.json();
     renderLayer(document.getElementById('layer-sel').value);
     setStatus(`完了 (${forecastData.meta.elapsed_sec}s / ${forecastData.meta.num_members}メンバー)`, s.total, s.total);
+    // Show init/valid time in header
+    if (forecastData.meta.init_time) {
+      document.getElementById('init-time').textContent  = forecastData.meta.init_time;
+      document.getElementById('valid-time').textContent = forecastData.meta.valid_time;
+      document.getElementById('time-info').style.display = 'block';
+    }
     btn.disabled = false;
   } else if (s.status === 'error') {
     clearInterval(pollTimer);
